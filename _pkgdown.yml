@@ -2,6 +2,10 @@ template:
   # package: tidytemplate
   bootstrap: 5
 
+navbar:
+  structure:
+    right: [search, github]
+
 reference:
 - title: Exporting data
   desc: >
