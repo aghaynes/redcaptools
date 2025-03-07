@@ -28,7 +28,7 @@ redcap_export_tbl <- function(token, url, content, ...){
     httr2::req_headers() %>%
     httr2::req_body_form(token = token,
                          content = content,
-                         format = "json")
+                         format = "json", ...)
 
   resp <- req %>% httr2::req_perform()
   if(httr2::resp_status(resp) == 200){
@@ -173,7 +173,7 @@ redcap_export_byform <- function(token,
 
                    return(d)
 
-                 })
+                 }, simplify = FALSE)
 
   return(tabs)
 }
