@@ -7,7 +7,7 @@
 #'
 #' @return dataframe
 #' @export
-#' @importFrom httr2 request req_headers req_body_form req_perform resp_status resp_body_string
+#' @importFrom httr2 request req_headers req_body_form req_perform resp_status resp_body_json
 #' @importFrom magrittr %>%
 #' @importFrom utils read.csv
 #'
@@ -28,15 +28,20 @@ redcap_export_tbl <- function(token, url, content, ...){
     httr2::req_headers() %>%
     httr2::req_body_form(token = token,
                          content = content,
-                         format = "csv",
-                         ...)
+                         format = "json")
 
   resp <- req %>% httr2::req_perform()
   if(httr2::resp_status(resp) == 200){
-    body <- resp %>% httr2::resp_body_string()
-    if(nchar(body) > 1){
-      return(read.csv(textConnection(body), na.strings = c("NA", "")))
-    }
+    body <- resp %>% httr2::resp_body_json(simplifyVector = TRUE)
+    # if(nchar(body) > 1){
+    # loop through variables and coerce to numeric?
+    tmp <- tempfile()
+    #print(tmp)
+    write.csv(body, tmp, row.names = FALSE)
+    return(read.csv(tmp,
+                    na.strings = c("NA", "")))
+    # }
+    # return(body)
   }
 }
 
@@ -245,10 +250,11 @@ redcap_export_batch <- function(token,
                                  forms = sheet,
                                  'fields[0]' = idvar)
           if(remove_empty & !is.null(csv)) csv <- remove_empty_rows(csv)
-        } else {csv <- redcap_export_tbl(token,url,"record",
-                                         records = records,
-                                         forms = sheet,
-                                         'fields[0]' = idvar)
+        } else {
+          csv <- redcap_export_tbl(token,url,"record",
+                                   records = records,
+                                   forms = sheet,
+                                   'fields[0]' = idvar)
         }
 
         if (i == 1){
