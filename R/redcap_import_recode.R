@@ -18,7 +18,7 @@
 #'running this function.
 #'
 #'
-#'@param selected_data Data to be recoded
+#'@param input_data Data to be recoded
 #'@param dict Data dictionary (e.g. as downloaded from REDCap or via
 #'  \code{redcap_export_meta(rc_token, rc_url)$meta}). If not supplied, this
 #'  will be downloaded from the API using \code{rc_token} and \code{rc_token}.
@@ -42,6 +42,9 @@
 #'@param if_empty Sets a default value for empty cells. This value can be
 #'  changed for each variable when using manual recoding. Default = NA (meaning
 #'  the cell remains empty).
+#'@param cb_delims Character vector to specify the delimiter(s) to separate
+#'  values for checkbox fields in a single cell. Default = c(",","
+#'  ",".",";","|")
 #'@param auto_conv If TRUE, the variable will be auto-converted according to the
 #'  best matching field type and validation in REDCap. If FALSE, the user can
 #'  decide how the variable should be converted. If the option to continue is
@@ -79,9 +82,10 @@
 #'@return Data frame with recoded data. Log-file with executed code.
 #'@export
 #'@importFrom stringr str_split
-#'@importFrom crayon bold underline blue red
-#'@importFrom dplyr select mutate na_if across
-#'@importFrom tidyselect everything
+#'@importFrom crayon bold underline blue red green yellow magenta strip_style
+#'@importFrom dplyr select mutate na_if across row_number
+#'@importFrom tidyselect everything starts_with all_of
+#'@importFrom tidyr separate_longer_delim pivot_wider
 #'@importFrom utils str write.table
 #'@importFrom knitr kable
 #'@importFrom lubridate hm hms ms
@@ -99,7 +103,7 @@
 
 
 
-redcap_import_recode <- function(selected_data,
+redcap_import_recode <- function(input_data,
                                  dict = NULL,
                                  missing_codes = NULL,
                                  rc_token,
@@ -107,6 +111,7 @@ redcap_import_recode <- function(selected_data,
                                  start_var = 1,
                                  pot_miss = c("miss","unknown","excluded","^0$","NA","N.A."),
                                  if_empty = NA,
+                                 cb_delims = c(","," ",".",";","|"),
                                  auto_conv = TRUE,
                                  auto_recode = FALSE,
                                  auto_recode_precision = 0.5,
@@ -119,12 +124,23 @@ redcap_import_recode <- function(selected_data,
                                  wait = 2,
                                  ...) {
 
-  field_name <- field_type <- select_choices_or_calculations <- text_validation_type_or_show_slider_number <- field_label <- text_validation_min <- text_validation_max <- NULL
+  field_name <- field_type <- select_choices_or_calculations <- text_validation_type_or_show_slider_number <- field_label <- text_validation_min <- text_validation_max <- value <- n <- NULL
+  intro_ans <- manconv_ans <- conv_to <- contconv_ans <- manrec_ans <- rec_ans <- contrec_ans <- ""
+
+
+  # function for printing to match spacing
+  prhelp <- function(label, desc, width = 6) {
+    # visible length of the label (ignores ANSI codes)
+    vislen <- nchar(strip_style(label), type = "width")
+    # compute padding (at least one space)
+    spaces <- if (width > vislen) strrep(" ", width - vislen) else " "
+    cat("   ", label, spaces, " =  ", desc, "\n", sep = "")
+  }
 
   # evaluate inputs ----
 
   # data
-  check_data(selected_data)
+  check_data(input_data)
 
 
   # dict
@@ -196,6 +212,11 @@ redcap_import_recode <- function(selected_data,
   } else if (wait %% 1 != 0) {
     stop("wait should be a single integer")
   }
+  if (!is.character(cb_delims)) {
+    stop("cb_delims must be a character vector.")
+  } else if (any(nchar(cb_delims) != 1)) {
+    stop("cb_delims must be single characters.")
+  }
 
 
   # parse additional arguments for redcap_import_dates_times
@@ -232,10 +253,10 @@ redcap_import_recode <- function(selected_data,
 
 
     intro_ans <- ""
-    while (intro_ans != 1) {
+    while (intro_ans != "1") {
       intro_ans <- readline(prompt="Type '1' to continue: ")
-      if (intro_ans != 1) {
-        cat("Please check your answer! (Type 'Esc' to cancel)")
+      if (intro_ans != "1") {
+        cat("\nPlease check your answer! (Press 'ESC' to cancel)")
       }
     }
 
@@ -316,51 +337,55 @@ redcap_import_recode <- function(selected_data,
     cat(bold("Potential Missings:\n"))
     cat("The provided data will be inspected for potential missing values according to the following patterns:\n")
     if (!is.null(pot_miss)) {
-       cat(paste(pot_miss,collapse = ", "))
-     } else {
-       cat("(No check for potential missings has been defined!)")
-     }
-     cat("\nThis text-search can be changed by providing a character vector for pot_miss.\n")
-     cat("E.g., pot_miss = c('miss','unknown','excluded','^0$','NA','N.A.')\n")
-     cat("To disable the search for potential missings, set 'pot_miss = NULL'!\n")
-     Sys.sleep(wait+1)
+      cat(paste(pot_miss,collapse = ", "))
+    } else {
+      cat("(No check for potential missings has been defined!)")
+    }
+    cat("\nThis text-search can be changed by providing a character vector for pot_miss.\n")
+    cat("E.g., pot_miss = c('miss','unknown','excluded','^0$','NA','N.A.')\n")
+    cat("To disable the search for potential missings, set 'pot_miss = NULL'!\n")
+    Sys.sleep(wait+1)
 
-     cat("\n\n")
-     cat(bold("Empty Cells:\n"))
-     cat("The default value for empty cells has been set as:\n")
-     if (is.na(if_empty)) {
-       cat("<NA> (field will stay empty)")
-     } else {
-       cat(italic(if_empty))
-     }
-     cat("\nTo change it, provide a different value for if_empty (e.g., if_empty = 'N.A.')\n")
-     Sys.sleep(wait+1)
+    cat("\n\n")
+    cat(bold("Empty Cells:\n"))
+    cat("The default value for empty cells has been set as:\n")
+    if (is.na(if_empty)) {
+      cat("<NA> (field will stay empty)")
+    } else {
+      cat(italic(if_empty))
+    }
+    cat("\nTo change it, provide a different value for if_empty (e.g., if_empty = 'N.A.')\n")
+    Sys.sleep(wait+1)
 
-     cat("\n\n\n")
-     cat("There are other things that you can change when running the function.\n")
-     cat("Feel free to have a look at the documentation.\n\n\n")
-
-
-     intro_ans <- ""
-     while (intro_ans != 1) {
-       intro_ans <- readline(prompt="Type '1' to continue: ")
-       if (intro_ans != 1) {
-         cat("Please check your answer! (Type 'Esc' to cancel)")
-       }
-     }
-
-     cat("\n\n")
-     cat(bold("WHEN MOVING ALONG THE LOOP, PLEASE BE CAREFUL WITH YOUR CHOICES AS IT IS NOT POSSIBLE TO GO BACK!!\n\n"))
-     cat("You can press 'Esc' any time to stop the function but it is advised to finish the loop properly! This can be done by either typing 'exit' in the prompt or by looping through all the variables. It makes sure that the executed code is properly written in the log-file and can be copy-pasted into your R-script and adjusted manually at a later time.\n\n")
+    cat("\n\n\n")
+    cat("There are other things that you can change when running the function.\n")
+    cat("Feel free to have a look at the documentation.\n\n\n")
 
 
-    cat("Are you ready to begin? \n 1 = YES\n'esc' = STOP")
     intro_ans <- ""
-    while (intro_ans != 1) {
+    while (intro_ans != "1") {
+      intro_ans <- readline(prompt="Type '1' to continue: ")
+      if (intro_ans != "1") {
+        cat("\nPlease check your answer! (Press 'ESC' to cancel)")
+      }
+    }
+
+    cat("\n\n")
+    cat(bold("WHEN MOVING ALONG THE LOOP, PLEASE BE CAREFUL WITH YOUR CHOICES AS IT IS NOT POSSIBLE TO GO BACK!!\n\n"))
+    cat("You can press 'Esc' any time to stop the function but it is advised to finish the loop properly! This can be done by either typing 'exit' in the prompt or by looping through all the variables. It makes sure that the executed code is properly written in the log-file and can be copy-pasted into your R-script and adjusted manually at a later time.\n\n")
+
+
+    cat("Are you ready to begin?")
+    cat(paste0("\nType ",green(bold("y")), " and press Enter to continue."))
+    cat(paste0("\nPress ",red(bold("ESC"))," to stop.\n"))
+    intro_ans <- ""
+    while (intro_ans != "y") {
       intro_ans <- readline(prompt="Answer: ")
-      if (intro_ans != 1) {
-        cat("Please check your answer! \n 1 = YES\n'esc' = STOP")
-        intor_ans <- ""
+      if (intro_ans != "y") {
+        cat("\nPlease check your answer!")
+        cat(paste0("\nType ",green(bold("y")), " and press Enter to continue."))
+        cat(paste0("\nPress ",red(bold("ESC"))," to stop.\n"))
+        intro_ans <- ""
       }
     }
 
@@ -372,7 +397,7 @@ redcap_import_recode <- function(selected_data,
 
   # open log-files ----
   if(log) {
-    write.table(paste0("\n\n",format(Sys.time(), "%Y-%m-%d %H:%M:%S"),":\n\nrecoded_data <- mutate(",deparse(substitute(selected_data))), log_code, quote = FALSE, row.names = FALSE, col.names = FALSE, append = TRUE)
+    write.table(paste0("\n\n",format(Sys.time(), "%Y-%m-%d %H:%M:%S"),":\n\nrecoded_data <- mutate(",deparse(substitute(input_data))), log_code, quote = FALSE, row.names = FALSE, col.names = FALSE, append = TRUE)
     write.table(paste0("\n, across(everything(), as.character)"), log_code, quote = FALSE, row.names = FALSE, col.names = FALSE, append = TRUE)
 
     write.table(paste0("\n\n",format(Sys.time(), "%Y-%m-%d %H:%M:%S")), log_table, quote = FALSE, row.names = FALSE, col.names = FALSE, append = TRUE)
@@ -382,7 +407,7 @@ redcap_import_recode <- function(selected_data,
 
   # read data & dict, prepare output variables ----
 
-  name_vars <- colnames(selected_data)
+  name_vars <- colnames(input_data)
 
   rc_spec <- dict |>
     select(field_name,
@@ -394,13 +419,13 @@ redcap_import_recode <- function(selected_data,
            max = text_validation_max)
 
   vars_recode <- list()
-
+  remove_cb_col <- c()
 
 
 
   # start variable for-loop ----
 
-  for (i in seq_along(name_vars)[start_var:ncol(selected_data)]) {
+  for (i in seq_along(name_vars)[start_var:ncol(input_data)]) {
 
     # initiate option to go back with a while loop
     goback = TRUE
@@ -412,11 +437,14 @@ redcap_import_recode <- function(selected_data,
     for_skip = FALSE
 
     # later in the script, the user can manually change expressions that will be used to search for missings for one variable only
-    # this option makes sure that only the part about changing expressions is repeated in the while-loop
+    # this option makes sure that only the summary is repeated in the while-loop
     change_pot_miss <- FALSE
 
-    # the same goes for rounding of numeric values (but there the conversion needs to happen again)
+
+    # the same goes for rounding of numeric values and the change in delimiters for checkbox fields
+    # but there the conversion needs to happen again
     change_round <- FALSE
+    change_cb_delims <- FALSE
 
 
 
@@ -425,13 +453,13 @@ redcap_import_recode <- function(selected_data,
 
       ## summarize data and RC dict ----
 
-      var <- selected_data[,i]
+      var <- input_data[,i]
       name <- name_vars[i]
 
 
-      if (!change_pot_miss) { # this part will be skipped if only the missing terms are adjusted
+      if (!change_pot_miss) { # the part until the summary will be skipped if only the missing terms are adjusted
 
-        if(!change_round) {
+        if(!change_round & !change_cb_delims) { # the part until the conversion will be skipped if only the rounding or checkbox delimieters change
 
           if (!suppress_txt) cat(paste0("\n\nVariable: ",blue(bold(underline(name))),"\n\n"))
           Sys.sleep(wait)
@@ -578,7 +606,7 @@ redcap_import_recode <- function(selected_data,
 
             # slider
           } else if (rc_type == "slider") {
-              conv_to <- "slider"
+            conv_to <- "slider"
             conv_label <- "Slider Variable"
             # currently min/max are hard checked during import, so they need to be included
             # if empty, they are the defaults from 0 to 100
@@ -587,22 +615,17 @@ redcap_import_recode <- function(selected_data,
             rc_max <- rc_spec$max[which(rc_spec$field_name == name)]
             if (is.na(rc_max)) rc_max <- 100
 
+            # checkbox
+          } else if (rc_type == "checkbox") {
+            conv_to <- "cb"
+            conv_label <- "checkbox"
+
             # calc
           } else if (rc_type == "calc") {
             if (!suppress_txt) {
               cat("\n\n")
               cat(bold(underline("Note:"),"\nValues for calculations will not be imported by REDCap!\nThey will be calculated automatically during the import process."))
               cat("\n-------------------------------------------------------------------------\n\n")
-            }
-            for_skip = TRUE
-            break
-
-            # checkbox
-          } else if (rc_type == "checkbox") {
-            if (!suppress_txt) {
-              cat("\n\n")
-              cat(bold(underline("Note:"),"\nCheckbox variable will be skipped as it has to be split into multiple variables.\nThis will be done in a separate step!"))
-              cat("\n\n-------------------------------------------------------------------------\n\n")
             }
             for_skip = TRUE
             break
@@ -636,29 +659,31 @@ redcap_import_recode <- function(selected_data,
 
             ## INPUT ----
             cat("Would you like to convert the variable as suggested?")
-            cat("\n 1 = YES (convert as suggested)")
-            cat("\n 0 = NO (convert manually)")
-            cat("\n 'skip' = skip this variable")
-            cat("\n 'exit' = stop loop, exit code")
+            cat("\n\nChoose an option (type and press Enter):\n")
+            prhelp(green(bold("y")),"YES, convert as suggested.")
+            prhelp(yellow(bold("n")),"NO, convert manually.")
+            prhelp(red("skip"),"do NOT convert and move to next variable.")
+            prhelp(red("exit"),"do NOT convert and stop loop.")
             manconv_ans <- ""
 
-            while (manconv_ans != '1' &
-                   manconv_ans != '0' &
+            while (manconv_ans != 'y' &
+                   manconv_ans != 'n' &
                    manconv_ans != 'skip' &
                    manconv_ans != 'exit') {
 
               manconv_ans <- readline(prompt="Answer: ")
 
-              if (manconv_ans != '1' &
-                  manconv_ans != '0' &
+              if (manconv_ans != 'y' &
+                  manconv_ans != 'n' &
                   manconv_ans != 'skip' &
                   manconv_ans != 'exit') {
 
-                cat("Please check your answer!")
-                cat("\n 1 = YES (convert as suggested)")
-                cat("\n 0 = NO (convert manually)")
-                cat("\n 'skip' = skip this variable")
-                cat("\n 'exit' = stop loop, exit code")
+                cat("\nPlease check your answer!")
+                cat("\n\nChoose an option (type and press Enter):\n")
+                prhelp(green(bold("y")),"YES, convert as suggested.")
+                prhelp(yellow(bold("n")),"NO, convert manually.")
+                prhelp(red("skip"),"do NOT convert and move to next variable.")
+                prhelp(red("exit"),"do NOT convert and stop loop.")
                 manconv_ans <- ""
               }
             }
@@ -686,7 +711,7 @@ redcap_import_recode <- function(selected_data,
 
 
             # manual conversion ----
-            if (manconv_ans == "0") {
+            if (manconv_ans == "n") {
 
               ### INPUT ----
               cat("\nHow would you like to convert this variable?")
@@ -708,6 +733,7 @@ redcap_import_recode <- function(selected_data,
                                                        'phone',
                                                        'pseudo',
                                                        'slider',
+                                                       'cb',
                                                        'skip',
                                                        'exit'),
                                            conv_label = c("unvalidated text",
@@ -728,10 +754,11 @@ redcap_import_recode <- function(selected_data,
                                                           "Swiss phone number",
                                                           "pseudonym",
                                                           "Slider Variable",
-                                                          "do NOT convert and move to next item",
+                                                          "checkbox",
+                                                          "do NOT convert and move to next variable",
                                                           "do NOT convert and stop loop"))
 
-              print(kable(manual_choices,col.names = c("Options:","Description:")))
+              print(kable(manual_choices,col.names = c("Option:","Description:"),format = "simple"))
               conv_to <- ""
 
               while (conv_to != 'txt' &
@@ -752,6 +779,7 @@ redcap_import_recode <- function(selected_data,
                      conv_to != 'phone' &
                      conv_to != 'pseudo' &
                      conv_to != 'slider' &
+                     conv_to != 'cb' &
                      conv_to != 'skip' &
                      conv_to != 'exit') {
 
@@ -775,15 +803,16 @@ redcap_import_recode <- function(selected_data,
                     conv_to != 'phone' &
                     conv_to != 'pseudo' &
                     conv_to != 'slider' &
+                    conv_to != 'cb' &
                     conv_to != 'skip' &
                     conv_to != 'exit') {
 
                   cat("\nPlease check your answer!")
-                  print(kable(manual_choices,col.names = c("Options:","Description:")))
+                  print(kable(manual_choices,col.names = c("Option:","Description:"),format = "simple"))
                   conv_to <- ""
                 }
               }
-            } # end if (manconv_ans == 0)
+            } # end if (manconv_ans == n)
           } # end if (auto_conv == FALSE)
 
 
@@ -807,7 +836,7 @@ redcap_import_recode <- function(selected_data,
             break
           }
 
-        } # # end if (!change_round), this part will be skipped if only the numeric values should be rounded
+        } # # end if (!change_round & !change_cb_delims), this part will be skipped if only the numeric values should be rounded or the checkbox delimiters adjusted
 
 
 
@@ -925,15 +954,15 @@ redcap_import_recode <- function(selected_data,
                                     "),date_only = TRUE)")
 
             } else {
-            converted_var <- do.call(redcap_import_dates,c(list(var = var),args_rc_dates))
-            # sometimes date-times are entered in Excel-format: they are recoded into a special variable for displaying the no-matches
-            # because it's easier to understand what the no-match is about (instead of displaying e.g. 31341.34375)
-            if (any(grepl("^\\d{4,}\\.\\d+$",var))) {
-              special_no_match <- if_else(grepl("^\\d{4,}\\.\\d+$",var),redcap_import_datetime(var,args_rc_dates,args_rc_times),var)
-            } else {
-              special_no_match <- var
-            }
-            log_default <- paste0("format(redcap_import_dates(",name,", ",paste0(log_rc_dates,collapse = ", "),"))")
+              converted_var <- do.call(redcap_import_dates,c(list(var = var),args_rc_dates))
+              # sometimes date-times are entered in Excel-format: they are recoded into a special variable for displaying the no-matches
+              # because it's easier to understand what the no-match is about (instead of displaying e.g. 31341.34375)
+              if (any(grepl("^\\d{4,}\\.\\d+$",var))) {
+                special_no_match <- if_else(grepl("^\\d{4,}\\.\\d+$",var),redcap_import_datetime(var,args_rc_dates,args_rc_times),var)
+              } else {
+                special_no_match <- var
+              }
+              log_default <- paste0("format(redcap_import_dates(",name,", ",paste0(log_rc_dates,collapse = ", "),"))")
             }
 
 
@@ -1014,18 +1043,39 @@ redcap_import_recode <- function(selected_data,
 
 
             ## slider ----
-            # slider needs to be an integer (no missing data codes possible)
+            # slider needs to be an integer
             # min/max are hard checked
           } else if (conv_to == 'slider') {
-            converted_var <- if_else(as.numeric(var) %% 1 == 0 &
-                                       as.numeric(var) >= rc_min &
-                                       as.numeric(var) <= rc_max,
-                                     as.integer(var),NA)
-            log_default <- paste0("if_else(as.numeric(",name,") %% 1 == 0 &
-                                       as.numeric(",name,") >= ",rc_min," &
-                                       as.numeric(",name,") <= ",rc_max,",
-                                     as.integer(",name,"),NA)")
 
+            if (change_round) {
+              converted_var <- if_else(round(as.numeric(var)) %% 1 == 0 &
+                                         as.numeric(var) >= rc_min &
+                                         as.numeric(var) <= rc_max,
+                                       as.integer(var),NA)
+              log_default <- paste0("as.character(as.integer(round(as.numeric(",name,"))))")
+
+            } else {
+              converted_var <- if_else(as.numeric(var) %% 1 == 0 &
+                                         as.numeric(var) >= rc_min &
+                                         as.numeric(var) <= rc_max,
+                                       as.integer(var),NA)
+              log_default <- paste0("as.character(as.integer(",name,"))")
+            }
+
+
+
+
+            ## checkbox ----
+          } else if (conv_to == 'cb') {
+
+            pattern <- paste0("[", paste0(gsub("([.\\|])", "\\\\\\1", cb_delims), collapse = ""), "]")
+
+            checkbox_df <- data.frame(var) |>
+              mutate(n = row_number(),.before = var,
+                     var = gsub(pattern,"split_here",var)) |>
+              separate_longer_delim(var, delim = "split_here")
+
+            converted_var <- as.factor(checkbox_df$var)
 
           }
 
@@ -1063,7 +1113,7 @@ redcap_import_recode <- function(selected_data,
             summary_table <- data.frame(Value = names(summary(as.factor(var[potential_missings]))),
                                         Count = as.numeric(summary(as.factor(var[potential_missings])))
             )
-            print(kable(summary_table))
+            print(kable(summary_table,format = "simple"))
           }
         }
 
@@ -1083,7 +1133,7 @@ redcap_import_recode <- function(selected_data,
                                           Count = as.numeric(summary(as.factor(var[no_match])))
               )
             }
-            print(kable(summary_table))
+            print(kable(summary_table,format = "simple"))
           }
         }
 
@@ -1112,55 +1162,73 @@ redcap_import_recode <- function(selected_data,
       ## INPUT ----
       if(continue) {
         cat("\n\nContinue?")
-        cat("\n 1 = YES (start recoding)")
-        cat("\n 2 = change expressions indicating missing values in this variable and the following")
-        if(conv_to %in% c("int","num1","num2","num3","num4","time_hm","dt")) {
-          cat("\n 3 = round values with too many decimals (or delete unneccessary time info)")
+        cat("\n\nChoose an option (type and press Enter):\n")
+        prhelp(green(bold("y")),"YES (start recoding)",15)
+        if (!auto_conv) prhelp(yellow(bold("n")),"NO (repeat same variable)",15)
+        prhelp(yellow(bold("e")),"change expression(s) indicating missing values in this variable and the following",15)
+        if(conv_to %in% c("int","num1","num2","num3","num4","slider")) {
+          prhelp(yellow(bold("r")),"round values with more decimal places than permitted",15)
+        }
+        if(conv_to %in% c("time_hm","dt")) {
+          prhelp(yellow(bold("r")),"remove time information that is not required",15)
+        }
+        if (conv_to == 'cb') {
+          prhelp(yellow(bold("d")),"change delimiter for checkbox variables",15)
         }
         if (!auto_conv) {
-          cat("\n 0 = NO (start over)")
-          cat("\n 'on' = turn on auto conversion")
+          prhelp(magenta("auto_conv on"),"turn on auto conversion",15)
         } else {
-          cat("\n 'off' = turn off auto conversion")
+          prhelp(magenta("auto_conv off"),"turn off auto conversion",15)
         }
-        cat("\n 'skip' = skip this variable")
-        cat("\n 'exit' = stop loop, exit code")
+        prhelp(red("skip"),"do NOT convert and move to next variable.",15)
+        prhelp(red("exit"),"do NOT convert and stop loop.",15)
+
         contconv_ans <- ""
 
-        while (contconv_ans != '1' &
-               contconv_ans != '2' &
-               contconv_ans != '3' &
-               contconv_ans != 'on' &
-               contconv_ans != 'off' &
-               contconv_ans != '0' &
+        while (contconv_ans != 'y' &
+               contconv_ans != 'n' &
+               contconv_ans != 'e' &
+               contconv_ans != 'r' &
+               contconv_ans != 'd' &
+               contconv_ans != 'auto_conv on' &
+               contconv_ans != 'auto_conv off' &
                contconv_ans != 'skip' &
                contconv_ans != 'exit') {
 
           contconv_ans <- readline(prompt="Answer: ")
 
-          if (contconv_ans != '1' &
-              contconv_ans != '2' &
-              contconv_ans != '3' &
-              contconv_ans != 'on' &
-              contconv_ans != 'off' &
-              contconv_ans != '0' &
+          if (contconv_ans != 'y' &
+              contconv_ans != 'n' &
+              contconv_ans != 'e' &
+              contconv_ans != 'r' &
+              contconv_ans != 'd' &
+              contconv_ans != 'auto_conv on' &
+              contconv_ans != 'auto_conv off' &
               contconv_ans != 'skip' &
               contconv_ans != 'exit') {
 
-            cat("Please check your answer!")
-            cat("\n 1 = YES (start recoding)")
-            cat("\n 2 = change expressions indicating missing values in this variable and the following")
-            if(conv_to %in% c("int","num1","num2","num3","num4","time_hm","dt")) {
-              cat("\n 3 = round values with too many decimals (or delete unneccessary time info)")
+            cat("\nPlease check your answer!")
+            cat("\n\nChoose an option (type and press Enter):\n")
+            prhelp(green(bold("y")),"YES (start recoding)",15)
+            if (!auto_conv) prhelp(yellow(bold("n")),"NO (repeat same variable)",15)
+            prhelp(yellow(bold("e")),"change expression(s) indicating missing values in this variable and the following",15)
+            if(conv_to %in% c("int","num1","num2","num3","num4","slider")) {
+              prhelp(yellow(bold("r")),"round values with more decimal places than permitted",15)
+            }
+            if(conv_to %in% c("time_hm","dt")) {
+              prhelp(yellow(bold("r")),"remove time information that is not required",15)
+            }
+            if (conv_to == 'cb') {
+              prhelp(yellow(bold("d")),"change delimiter for checkbox variables",15)
             }
             if (!auto_conv) {
-              cat("\n 0 = NO (start over)")
-              cat("\n 'on' = turn on auto conversion")
+              prhelp(magenta("auto_conv on"),"turn on auto conversion",15)
             } else {
-              cat("\n 'off' = turn off auto conversion")
+              prhelp(magenta("auto_conv off"),"turn off auto conversion",15)
             }
-            cat("\n 'skip' = skip this variable")
-            cat("\n 'exit' = stop loop, exit code")
+            prhelp(red("skip"),"do NOT convert and move to next variable.",15)
+            prhelp(red("exit"),"do NOT convert and stop loop.",15)
+
             contconv_ans <- ""
           }
         }
@@ -1169,21 +1237,22 @@ redcap_import_recode <- function(selected_data,
 
       ### change potential missings ----
 
-      if (contconv_ans == '2') {
+      if (contconv_ans == 'e') {
 
         # set change_pot_miss to TRUE so that conversion-part is skipped
         change_pot_miss <- TRUE
 
-        #### INPUT ----
-
-        cat("\nCurrently set as Potential Missing Expressions:\n")
+        cat(underline(bold("\nThe following expression(s) are currently used to detect potential missing values:\n")))
         if (!is.null(pot_miss)) {
           cat(paste(pot_miss,collapse = "\n"))
         } else {
-          cat("(No check for potential missings has been defined!)")
+          cat("(No expressions for detecting potential missing values are defined)")
         }
-        cat("\n\nExpressions can be defined in a character vector and a text-search is applied to search the data.\nE.g., c('miss','unknown','excluded','^0$','NA','N.A.')\n")
-        cat("\nTo disable the search for potential missings, type 'NULL'!\n")
+        cat(underline("\n\nNOTE:"))
+        cat("\nYou must define expressions in a character vector, which are then used to search the data.\nFor example: c('miss','unknown','excluded','^0$','NA','N.A.')\n")
+        cat(paste0("\nTo disable the search for potential missings, type ",yellow("'stop search'")," and press Enter!"))
+        cat(paste0("\nTo not change expressions, type ",yellow("'no change'")," and press Enter!\n\n"))
+        old_expr <- pot_miss
         pot_miss <- NULL
 
         while (!is.character(pot_miss)) {
@@ -1195,47 +1264,139 @@ redcap_import_recode <- function(selected_data,
 
           if (!is.character(pot_miss)) {
 
-            cat("Please check your answer!")
-            cat("Expressions can be defined in a character vector and a text-search is applied to search the data.\nE.g., c('miss','unknown','excluded','^0$','NA','N.A.')\n")
+            cat("\nPlease check your answer!")
+            cat(underline("\n\nNOTE:"))
+            cat("\nYou must define expressions in a character vector, which are then used to search the data.")
+            cat("\nFor an exact match, use ^ and $ to indicate the beginning and end of the string.")
+            cat("\nFor example: c('miss','unknown','excluded','^0$','NA','N.A.')\n")
+            cat(paste0("\nTo disable the search for potential missings, type ",yellow("'stop search'")," and press Enter!"))
+            cat(paste0("\nTo not change expressions, type ",yellow("'no change'")," and press Enter!\n\n"))
             pot_miss <- NULL
           }
         }
 
         if (length(pot_miss) == 1) {
-          if (pot_miss == "NULL") {
+          if(pot_miss == "stop search") {
             pot_miss <- NULL
+            cat("\nSearch for potential missings has been disabled.")
+          } else if (pot_miss == "no change" | identical(pot_miss, old_expr)) {
+            pot_miss <- old_expr
+            cat("\nExpressions for detecting potential missings have not been changed.")
           }
         }
+        if (!is.null(pot_miss) & !identical(pot_miss, old_expr)) {
+          cat(underline(bold("\nThe expression(s) used to detect potential missing values have been changed to:\n")))
+          cat(paste(pot_miss,collapse = "\n"))
+        }
 
-      }
+        cat("\n\nRepeating current variable....\n\n")
+        Sys.sleep(wait)
+
+      } # end manual pot_miss adjust
+
+
 
       ### round numeric or time values ----
 
-      if (contconv_ans == '3') {
+      if (contconv_ans == 'r') {
 
         # set change_round to TRUE so questions are skipped and rounding performed in conversion-part
         change_round <- TRUE
 
-      }
+
+        if(conv_to %in% c("int","num1","num2","num3","num4","slider")) {
+          cat("\nValues will be rounded to match the format!\n\n")
+        }
+        if(conv_to %in% c("time_hm","dt")) {
+          cat("\nTime info will be removed!\n\n")
+        }
+
+        cat("Repeating current variable....\n\n")
+        Sys.sleep(wait)
+
+      } # end manual round adjust
+
+
+
+
+      ### change delimiter for checkbox vars ----
+
+      if (contconv_ans == 'd') {
+
+        # set change_cb_delims to TRUE so that conversion-part is skipped
+        change_cb_delims <- TRUE
+
+        cat(bold(underline("\nCurrently set as Delimiters:\n")))
+        cat(paste0('c("',paste0(cb_delims,collapse = '", "'),'")'))
+        cat(underline("\n\nNOTE:"))
+        cat("\nPlease define all delimiters in a character vector.")
+        cat('\nFor example: c(",", " ", ".", ";", "|")\n')
+
+        cb_delims <- ""
+        cb_delims_invalid <- TRUE
+
+        while (cb_delims_invalid) {
+
+          cb_delims <- readline(prompt="Answer: ")
+
+          if (!grepl("^c\\(.*\\)$", cb_delims)) {
+            cat("\nPlease check your answer!")
+            cat(underline("\n\nNOTE:"))
+            cat("\nPlease define all delimiters in a character vector.")
+            cat('\nFor example: c(",", " ", ".", ";", "|")\n')
+            cb_delims <- ""
+          }
+
+          if (grepl("^c\\(.*\\)$", cb_delims)) {
+            cb_delims <- eval(parse(text = cb_delims))
+
+            if (!is.character(cb_delims)) {
+              cat("\nPlease check your answer!")
+              cat(underline("\n\nNOTE:"))
+              cat("\nPlease define all delimiters in a character vector.")
+              cat('\nFor example: c(",", " ", ".", ";", "|")\n')
+              cb_delims <- ""
+            } else if (any(nchar(cb_delims) != 1)) {
+              cat("\nPlease check your answer!")
+              cat(underline("\n\nNOTE:"))
+              cat("\nPlease define all delimiters in a character vector.")
+              cat('\nFor example: c(",", " ", ".", ";", "|")\n')
+              cb_delims <- ""
+            } else {
+              cb_delims_invalid <- FALSE
+            }
+          }
+        }
+
+        cat(underline(bold("\nThe delimiter(s) for checkbox variables have been changed to:\n")))
+        cat(paste0('c("',paste0(cb_delims,collapse = '", "'),'")'))
+        cat("\n\nRepeating current variable....\n\n")
+        Sys.sleep(wait)
+
+      } # end manual cb_delims adjust
+
 
       ### start over ----
-      if (contconv_ans == '0') {
+      if (contconv_ans == 'n') {
         change_pot_miss <- FALSE
         change_round <- FALSE
+        change_cb_delims <- FALSE
       }
 
 
       ### turn on auto conversion ----
-      if (contconv_ans == 'on') {
+      if (contconv_ans == 'auto_conv on') {
         change_pot_miss <- FALSE
         change_round <- FALSE
+        change_cb_delims <- FALSE
         auto_conv <- TRUE
       }
 
       ### turn off auto conversion ----
-      if (contconv_ans == 'off') {
+      if (contconv_ans == 'auto_conv off') {
         change_pot_miss <- FALSE
         change_round <- FALSE
+        change_cb_delims <- FALSE
         auto_conv <- FALSE
       }
 
@@ -1264,10 +1425,11 @@ redcap_import_recode <- function(selected_data,
 
       # go-back option will be set to false which exits the while-loop
 
-      if (!continue | contconv_ans == '1') {
+      if (!continue | contconv_ans == 'y') {
         goback = FALSE
         change_pot_miss <- FALSE
         change_round <- FALSE
+        change_cb_delims <- FALSE
       }
 
 
@@ -1277,11 +1439,21 @@ redcap_import_recode <- function(selected_data,
 
     # if for_break has been set to TRUE, the code will break the variable for-loop and exit the code
     if (for_break) {
+      if (!suppress_txt) {
+        cat("\n\nExiting code...\n")
+        cat("\n-------------------------------------------------------------------------\n\n")
+        Sys.sleep(wait)
+      }
       break
     }
 
     # if for_skip has been set to TRUE, the code will go to next variable in variable for-loop
     if (for_skip) {
+      if (!suppress_txt) {
+        cat("\n\nMoving to next variable...\n")
+        cat("\n-------------------------------------------------------------------------\n\n")
+        Sys.sleep(wait)
+      }
       next
     }
 
@@ -1302,7 +1474,7 @@ redcap_import_recode <- function(selected_data,
       if (!identical(var,converted_var)) {
 
         recoded_var <- as.character(converted_var)
-        write.table(paste0("\n, ",name," = ",log_default), log_code, quote = FALSE, row.names = FALSE, col.names = FALSE, append = TRUE)
+        if(log) write.table(paste0("\n, ",name," = ",log_default), log_code, quote = FALSE, row.names = FALSE, col.names = FALSE, append = TRUE)
 
       } else {
         recoded_var <- as.character(var)
@@ -1375,20 +1547,10 @@ redcap_import_recode <- function(selected_data,
       to_recode <- c(to_recode,add_nomatch)
     }
 
-    ### slider ----
-    if (conv_to == 'slider') {
-      recoded_var <- as.character(converted_var)
-      vars_recode[[length(vars_recode)+1]] <- recoded_var
-      names(vars_recode)[length(vars_recode)] <- name
-      write.table(paste0("\n, ",name," = ",log_default), log_code, quote = FALSE, row.names = FALSE, col.names = FALSE, append = TRUE)
 
-      to_recode <- NULL
-      if (!suppress_txt) {
-      cat("\n\nCurrently missing data codes can't be imported for slider variables (06.11.2024).\n")
-      cat("All cells with values indicating potential missings or with values not matching the format will be set to NA (empty).\n")
-      cat("Empty cells will remain empty.\n\n")
-      }
-    }
+    ### checkbox ----
+    if (conv_to == 'cb') var <- checkbox_df$var
+
 
 
     if (!is.null(to_recode)) {
@@ -1420,10 +1582,10 @@ redcap_import_recode <- function(selected_data,
           summary_table <- data.frame(Value = names(summary(factor(var[var %in% to_recode],levels = to_recode))),
                                       Count = as.numeric(summary(factor(var[var %in% to_recode],levels = to_recode)))
           )
-          print(kable(summary_table))
+          print(kable(summary_table,format = "simple"))
 
           cat(underline("\n\nPotential codes to use from REDCap codebook:"))
-          print(kable(coded_options))
+          print(kable(coded_options,format = "simple"))
         }
 
         Sys.sleep(wait)
@@ -1514,8 +1676,8 @@ redcap_import_recode <- function(selected_data,
           if (!suppress_txt) cat(underline("\n\nSuggestion:"))
 
           if (!suppress_txt & nrow(sugg_coding) > 0) {
-            print(kable(sugg_coding[1:3],col.names = c("Value in Data Table","","Suggested Code")))
-            cat("\nValues for which no/multiple matches are found will be set to <NA>!")
+            print(kable(sugg_coding[1:3],col.names = c("Value in Data Table","","Suggested Code"),format = "simple"))
+            cat("\nValues for which no/multiple matches are found will be set to <NA> (empty)!")
           }
 
 
@@ -1548,38 +1710,46 @@ redcap_import_recode <- function(selected_data,
           if (auto_recode) {
             if (!suppress_txt) cat(paste0("\n\n\n",bold(underline("NOTE:")," Auto-recoding is active!\n(To turn it off, set 'auto_recode = FALSE' or type 'off' when prompted to continue.)\n\n\n")))
             Sys.sleep(wait)
-            manrec_ans <- "1"
+            manrec_ans <- "y"
 
           } else {
 
             cat("\n\n\nWould you like to recode this variable as suggested or do it manually?")
-            cat("\n 1 = recode as suggested")
-            if (nrow(sugg_coding) > 0) cat("\n 2 = change precision of auto-matching")
-            cat("\n 0 = recode manually")
-            cat("\n 'skip' = do NOT recode, skip this variable")
-            cat("\n 'exit' = stop loop, exit code")
+            cat("\n\nChoose an option (type and press Enter):\n")
+            prhelp(green(bold("y")),"YES, recode as suggested")
+            prhelp(yellow(bold("n")),"NO, recode manually")
+            if (nrow(sugg_coding) > 0) {
+              prhelp(yellow(bold("p")),"change similarity index for the recoding suggestions")
+            }
+            prhelp(red("skip"),"do NOT recode and move to next variable.")
+            prhelp(red("exit"),"do NOT recode and stop loop.")
+
             manrec_ans <- ""
 
-            while (manrec_ans != '1' &
-                   manrec_ans != '2' &
-                   manrec_ans != '0' &
+            while (manrec_ans != 'y' &
+                   manrec_ans != 'n' &
+                   manrec_ans != 'p' &
                    manrec_ans != "skip" &
                    manrec_ans != "exit") {
 
               manrec_ans <- readline(prompt="Answer: ")
 
-              if (manrec_ans != '1' &
-                  manrec_ans != '2' &
-                  manrec_ans != '0' &
+              if (manrec_ans != 'y' &
+                  manrec_ans != 'n' &
+                  manrec_ans != 'p' &
                   manrec_ans != "skip" &
                   manrec_ans != "exit") {
 
-                cat("Please check your answer!")
-                cat("\n 1 = recode as suggested")
-                if (nrow(sugg_coding) > 0) cat("\n 2 = change precision of auto-matching")
-                cat("\n 0 = recode manually")
-                cat("\n 'skip' = do NOT recode, skip this variable")
-                cat("\n 'exit' = stop loop, exit code")
+                cat("\nPlease check your answer!")
+                cat("\n\nChoose an option (type and press Enter):\n")
+                prhelp(green(bold("y")),"YES, recode as suggested")
+                prhelp(yellow(bold("n")),"NO, recode manually")
+                if (nrow(sugg_coding) > 0) {
+                  prhelp(yellow(bold("p")),"change similarity index for the recoding suggestions")
+                }
+                prhelp(red("skip"),"do NOT recode and move to next variable.")
+                prhelp(red("exit"),"do NOT recode and stop loop.")
+
                 manrec_ans <- ""
               }
             }
@@ -1587,30 +1757,34 @@ redcap_import_recode <- function(selected_data,
 
 
           ### change similarity index ----
-          if (manrec_ans == '2') {
+          if (manrec_ans == 'p') {
 
-            cat(paste0("\nCurrent similarity index: ",auto_recode_precision))
-            cat("\n\nPlease enter a new similariy index between 0 and 1.\n")
-            auto_recode_precision <- NA
+            new_sim <- NA
 
-            while (!is.numeric(auto_recode_precision) |
-                   auto_recode_precision < 0 |
-                   auto_recode_precision > 1) {
+            while (!is.numeric(new_sim) |
+                   new_sim < 0 |
+                   new_sim > 1) {
 
-              auto_recode_precision <- readline(prompt="Answer: ")
+              cat(paste0("\nCurrent similarity index: ",auto_recode_precision))
+              new_sim <- readline(prompt="Please enter a new similarity index between 0 and 1: ")
 
-              if (suppressWarnings(!is.na(as.numeric(auto_recode_precision)))) {
-                auto_recode_precision <- as.numeric(auto_recode_precision)
+              if (suppressWarnings(!is.na(as.numeric(new_sim)))) {
+                new_sim <- as.numeric(new_sim)
               }
 
-              if (!is.numeric(auto_recode_precision) |
-                  auto_recode_precision < 0 |
-                  auto_recode_precision > 1) {
+              if (!is.numeric(new_sim) |
+                  new_sim < 0 |
+                  new_sim > 1) {
 
-                cat("\nPlease check your answer!")
-                cat("\nPlease enter a new similariy index between 0 and 1.\n")
-                auto_recode_precision <- NA
+                cat("\nPlease check your answer! Similarity index has to be a number between 0 and 1!\n")
+                new_sim <- NA
               }
+            }
+
+            if(new_sim != auto_recode_precision) {
+              auto_recode_precision <- new_sim
+              cat(paste0("\nSimilarity index has been adjusted to: ",auto_recode_precision,"\n\nRepeating current variable....\n\n"))
+              Sys.sleep(wait)
             }
 
           } else {
@@ -1646,7 +1820,7 @@ redcap_import_recode <- function(selected_data,
 
         ## auto ----
 
-        if (manrec_ans == '1') {
+        if (manrec_ans == 'y') {
 
           recoded_var <- as.factor(var)
           log_recode_code <- character()
@@ -1692,7 +1866,7 @@ redcap_import_recode <- function(selected_data,
 
         ## manual recoding----
 
-        if (manrec_ans == '0') {
+        if (manrec_ans == 'n') {
 
           recoded_var <- as.factor(var)
           log_recode_code <- character()
@@ -1704,7 +1878,7 @@ redcap_import_recode <- function(selected_data,
           cat(paste0("Variable: ",bold(underline(name)),"   ",italic(rc_label)))
           cat("\n\nIn the following, the code will walk you through all values of the variable that might need recoding.\n")
           cat("You can decide to either change the value to a code as defined in the codebook in REDCap, to set the value to NA, or to leave it unchanged.\n")
-          cat("If you are not sure what to do and want to consult with the study team first, I suggest to leave it unchanged and manually adjust the code output later on.\n")
+          cat("If you are not sure what to do and want to consult with the study team first, it might be best to leave it unchanged and manually adjust the code output later.\n")
           cat("Let's begin!\n\n\n")
 
 
@@ -1722,21 +1896,25 @@ redcap_import_recode <- function(selected_data,
             }
 
             cat("\n\nCodes to use from codebook in REDCap:")
-            print(kable(coded_options))
+            print(kable(coded_options,format = "simple"))
 
 
             ### INPUT ----
 
-            cat("\nPlease type matching code from the codebook or choose one of the following options:")
-            cat("\n 'empty' = field will be set to NA (or stays NA)")
-            cat("\n 'skip' = do NOT recode this value, value will stay as it is")
-            cat("\n 'stop' = stop recoding for this variable, move to next variable")
-            cat("\n 'exit' = stop loop, exit code")
+
+            cat("\n\nWhat would you like to do?")
+            cat("\n\nChoose an option (type and press Enter):\n")
+            cat(paste0("To ",green("recode")," this value, type the matching code from the codebook above!\n"))
+            prhelp(yellow("empty"),"field will be set to NA (or stays NA)",6)
+            prhelp(yellow("leave"),"do NOT recode this value, value will stay as it is, move to next value",6)
+            prhelp(red("skip"),"stop recoding for this variable, move to next variable",6)
+            prhelp(red("exit"),"stop loop, exit code",6)
+
             rec_ans <- ""
 
             while (!any(str_detect(coded_options$code,paste0("^",rec_ans,"$"))) &
                    rec_ans != 'empty' &
-                   rec_ans != 'stop' &
+                   rec_ans != 'leave' &
                    rec_ans != 'skip' &
                    rec_ans != 'exit') {
 
@@ -1744,16 +1922,17 @@ redcap_import_recode <- function(selected_data,
 
               if (!any(str_detect(coded_options$code,paste0("^",rec_ans,"$"))) &
                   rec_ans != 'empty' &
-                  rec_ans != 'stop' &
+                  rec_ans != 'leave' &
                   rec_ans != 'skip' &
                   rec_ans !='exit') {
 
-                cat("Code not recognized: Please try again!")
-                cat("\n\nPlease type matching code from the codebook or choose one of the following options:")
-                cat("\n 'empty' = field will be set to NA (or stays NA)")
-                cat("\n 'skip' = do NOT recode this value, value will stay as it is")
-                cat("\n 'stop' = stop recoding for this variable, move to next variable")
-                cat("\n 'exit' = stop loop, exit code")
+                cat("\nPlease check your answer!")
+                cat("\n\nChoose an option (type and press Enter):\n")
+                cat(paste0("To ",green("recode")," this value, type the matching code from the codebook above!\n"))
+                prhelp(yellow("empty"),"field will be set to NA (or stays NA)",6)
+                prhelp(yellow("leave"),"do NOT recode this value, value will stay as it is, move to next value",6)
+                prhelp(red("skip"),"stop recoding for this variable, move to next variable",6)
+                prhelp(red("exit"),"stop loop, exit code",6)
                 rec_ans <- ""
               }
             }
@@ -1774,14 +1953,14 @@ redcap_import_recode <- function(selected_data,
             # for_skip will be set to TRUE which will first break the recoding while-loop (see "end manual-recoding for-loop")
             # then, for_skip will cause the variable for-loop to move to the next variable (see "end recoding while-loop")
 
-            if (rec_ans == 'stop') {
+            if (rec_ans == 'skip') {
               for_skip = TRUE
               break
             }
 
             # skip:
             # moves to next item in manual-recoding for-loop
-            if (rec_ans == 'skip') {
+            if (rec_ans == 'leave') {
               log_recode_code <- c(log_recode_code,paste0(", '",lvl,"' ~ '",lvl,"'"))
               log_recode_table <- c(log_recode_table,paste0(",,",gsub(","," ",lvl),",",gsub(","," ",lvl)))
               next
@@ -1852,6 +2031,7 @@ redcap_import_recode <- function(selected_data,
 
         } # end if-statement (manual recoding)
 
+
         # output needs to be character
         recoded_var <- as.character(recoded_var)
 
@@ -1865,19 +2045,19 @@ redcap_import_recode <- function(selected_data,
 
           cat(paste0("\n\nYou have reached the end of the recoding loop for:\n\n",bold(underline(name)),"   ",italic(rc_label)))
           cat(underline("\n\n\nREDCap Codebook:"))
-          print(kable(coded_options))
+          print(kable(coded_options,format = "simple"))
 
           cat(underline("\n\nSummary before recoding:"))
           summary_table <- data.frame(Value = names(summary(as.factor(var[var %in% to_recode]))),
                                       Count = as.numeric(summary(as.factor(var[var %in% to_recode])))
           )
-          print(kable(summary_table))
+          print(kable(summary_table,format = "simple"))
 
           cat(underline("\n\nSummary after recoding:"))
           summary_table <- data.frame(Value = names(summary(as.factor(recoded_var[var %in% to_recode]))),
                                       Count = as.numeric(summary(as.factor(recoded_var[var %in% to_recode])))
-                                      )
-          print(kable(summary_table))
+          )
+          print(kable(summary_table,format = "simple"))
 
           cat("\n-------------------------------------------------------------------------")
         }
@@ -1889,43 +2069,45 @@ redcap_import_recode <- function(selected_data,
         #### INPUT ----
         if(continue) {
           cat("\n\nContinue?")
-          cat("\n 1 = YES")
+          cat("\n\nChoose an option (type and press Enter):\n")
+          prhelp(green(bold("y")),"YES",15)
           if (!auto_recode) {
-            cat("\n 0 = NO (repeat recoding)")
-            cat("\n 'on' = turn on auto recoding")
+            prhelp(yellow(bold("n")),"NO (repeat recoding)",15)
+            prhelp(magenta("auto_rec on"),"turn on auto-recoding",15)
           } else {
-            cat("\n 'off' = turn off auto recoding")
+            prhelp(magenta("auto_rec off"),"turn off auto-recoding",15)
           }
-          cat("\n 'skip' = skip this variable")
-          cat("\n 'exit' = stop loop, exit code")
+          prhelp(red("skip"),"do NOT recode and move to next variable.",15)
+          prhelp(red("exit"),"do NOT recode and stop loop.",15)
           contrec_ans <- ""
 
-          while (contrec_ans != '1' &
-                 contrec_ans != '0' &
-                 contrec_ans != 'on' &
-                 contrec_ans != 'off' &
+          while (contrec_ans != 'y' &
+                 contrec_ans != 'n' &
+                 contrec_ans != 'auto_rec on' &
+                 contrec_ans != 'auto_rec off' &
                  contrec_ans != 'skip' &
                  contrec_ans != 'exit') {
 
             contrec_ans <- readline(prompt="Answer: ")
 
-            if (contrec_ans != '1' &
-                contrec_ans != '0' &
-                contrec_ans != 'on' &
-                contrec_ans != 'off' &
+            if (contrec_ans != 'y' &
+                contrec_ans != 'n' &
+                contrec_ans != 'auto_rec on' &
+                contrec_ans != 'auto_rec off' &
                 contrec_ans != 'skip' &
                 contrec_ans != 'exit') {
 
-              cat("Please check your answer!")
-              cat("\n 1 = YES")
+              cat("\nPlease check your answer!")
+              cat("\n\nChoose an option (type and press Enter):\n")
+              prhelp(green(bold("y")),"YES",15)
               if (!auto_recode) {
-                cat("\n 0 = NO (repeat recoding)")
-                cat("\n 'on' = turn on auto recoding")
+                prhelp(yellow(bold("n")),"NO (repeat recoding)",15)
+                prhelp(magenta("auto_rec on"),"turn on auto-recoding",15)
               } else {
-                cat("\n 'off' = turn off auto recoding")
+                prhelp(magenta("auto_rec off"),"turn off auto-recoding",15)
               }
-              cat("\n 'skip' = skip this variable")
-              cat("\n 'exit' = stop loop, exit code")
+              prhelp(red("skip"),"do NOT recode and move to next variable.",15)
+              prhelp(red("exit"),"do NOT recode and stop loop.",15)
               contrec_ans <- ""
             }
           }
@@ -1933,12 +2115,12 @@ redcap_import_recode <- function(selected_data,
 
 
         ##### turn on auto recoding ----
-        if (contrec_ans == 'on') {
+        if (contrec_ans == 'auto_rec on') {
           auto_recode <- TRUE
           change_auto_recode_precision <- FALSE
         }
         ##### turn off auto recoding ----
-        if (contrec_ans == 'off') {
+        if (contrec_ans == 'auto_rec off') {
           auto_recode <- FALSE
           change_auto_recode_precision <- FALSE
         }
@@ -1966,7 +2148,7 @@ redcap_import_recode <- function(selected_data,
 
         # WHAT TO DO ----
 
-        if (!continue | contrec_ans == '1') {
+        if (!continue | contrec_ans == 'y') {
 
           # output needs to be character
           converted_var <- as.character(converted_var)
@@ -1993,21 +2175,89 @@ redcap_import_recode <- function(selected_data,
                        converted_var)) |>
             pull(final_var)
 
-          vars_recode[[length(vars_recode)+1]] <- final_var
-          names(vars_recode)[length(vars_recode)] <- name
 
-          if(log) {
+          if (conv_to != 'cb') {
 
-            write.table(paste0("\n, ",name," = case_match(",name), log_code, quote = FALSE, row.names = FALSE, col.names = FALSE, append = TRUE)
-            write.table(paste0(log_recode_code, sep=""), log_code, quote = FALSE, row.names = FALSE, col.names = FALSE, append = TRUE)
-            write.table(paste0(", .default = ",log_default,")"), log_code, quote = FALSE, row.names = FALSE, col.names = FALSE, append = TRUE)
+            # list is appended with the recoded var, this will be used in the mutate-statement below (see 'execute code')
+            vars_recode[[length(vars_recode)+1]] <- final_var
+            names(vars_recode)[length(vars_recode)] <- name
 
-            write.table(paste0(",",name), log_table, quote = FALSE, row.names = FALSE, col.names = FALSE, append = TRUE)
-            write.table(paste0(log_recode_table), log_table, quote = FALSE, row.names = FALSE, col.names = FALSE, append = TRUE)
-            write.table("\n", log_table, quote = FALSE, row.names = FALSE, col.names = FALSE, append = TRUE)
+            if(log) {
 
+              write.table(paste0("\n, ",name," = case_match(",name), log_code, quote = FALSE, row.names = FALSE, col.names = FALSE, append = TRUE)
+              write.table(paste0(log_recode_code, sep=""), log_code, quote = FALSE, row.names = FALSE, col.names = FALSE, append = TRUE)
+              write.table(paste0(", .default = ",log_default,")"), log_code, quote = FALSE, row.names = FALSE, col.names = FALSE, append = TRUE)
+
+              write.table(paste0(",",name), log_table, quote = FALSE, row.names = FALSE, col.names = FALSE, append = TRUE)
+              write.table(paste0(log_recode_table), log_table, quote = FALSE, row.names = FALSE, col.names = FALSE, append = TRUE)
+              write.table("\n", log_table, quote = FALSE, row.names = FALSE, col.names = FALSE, append = TRUE)
+
+            }
+
+            ## checkboxes ----
+            # need to be handled differently -> new variables have to be created and old one removed
+          } else {
+
+            final_df <- checkbox_df |>
+              mutate(var = tolower(final_var),
+                     value = if_else(!is.na(var),"1","0")) |>
+              pivot_wider(names_from = var,
+                          names_prefix = paste0(name,"___"),
+                          values_from = value) |>
+              mutate(across(starts_with(name), ~ if_else(is.na(.),"0",.))) |>
+              select(-n)
+
+            # remove column created for NAs
+            if (paste0(name,"___NA") %in% names(final_df)) {
+              remove_cb_col <- c(remove_cb_col,paste0(name,"___NA"))
+            }
+
+            # list is appended with the new variables and old variable is removed (see 'execute code')
+            vars_recode <- c(vars_recode,as.list(final_df))
+            remove_cb_col <- c(remove_cb_col,name)
+
+            if(log) {
+
+              write.table(
+                paste0(
+                  "\n) |> \n
+                mutate(n = row_number()) |>
+                left_join(data.frame(var = ",deparse(substitute(input_data)),"$",name,") |>
+                mutate(n= row_number(),
+                var = gsub('",gsub("(\\\\)", "\\\\\\\\", pattern),"','split_here', var)
+                ) |>
+                separate_longer_delim(var, delim = 'split_here') |>
+                mutate(var = case_match(var"
+                ),
+                log_code, quote = FALSE, row.names = FALSE, col.names = FALSE, append = TRUE)
+
+              write.table(paste0(log_recode_code, sep=""), log_code, quote = FALSE, row.names = FALSE, col.names = FALSE, append = TRUE)
+
+              write.table(
+                paste0(
+                  ")) |>
+                mutate(var = tolower(var),\n
+                     value = if_else(!is.na(var),'1','0')) |>
+              pivot_wider(names_from = var,
+                          names_prefix = paste0('",name,"___'),
+                          values_from = value) |>
+              mutate(across(starts_with('",name,"'), ~ if_else(is.na(.),'0',.))),
+              by = 'n') |>
+              select(-n) |>
+              mutate(",name,"  = NULL"),
+                log_code, quote = FALSE, row.names = FALSE, col.names = FALSE, append = TRUE)
+
+              if (paste0(name,"___NA") %in% names(final_df)) {
+                write.table(paste0(",",name,"___NA = NULL"), log_code, quote = FALSE, row.names = FALSE, col.names = FALSE, append = TRUE)
+              }
+
+
+              write.table(paste0(",",name), log_table, quote = FALSE, row.names = FALSE, col.names = FALSE, append = TRUE)
+              write.table(paste0(log_recode_table), log_table, quote = FALSE, row.names = FALSE, col.names = FALSE, append = TRUE)
+              write.table("\n", log_table, quote = FALSE, row.names = FALSE, col.names = FALSE, append = TRUE)
+
+            }
           }
-
 
 
 
@@ -2022,19 +2272,32 @@ redcap_import_recode <- function(selected_data,
 
       # if for_break has been set to TRUE, the code will break the variable for-loop and exit the code
       if (for_break) {
+        if (!suppress_txt) {
+          cat("\n\nExiting code...\n")
+          cat("\n-------------------------------------------------------------------------\n\n")
+          Sys.sleep(wait)
+        }
         break
       }
 
 
       # if for_skip has been set to TRUE, the code will go to next variable in variable for-loop ('skip')
       if (for_skip) {
+        if (!suppress_txt) {
+          cat("\n\nMoving to next variable...\n")
+          cat("\n-------------------------------------------------------------------------\n\n")
+          Sys.sleep(wait)
+        }
         next
       }
 
     } # end if-statement (anything to recode)
 
-    if (!suppress_txt) cat("\n-------------------------------------------------------------------------\n\n")
-    Sys.sleep(wait)
+    if (!suppress_txt) {
+      cat("\n\nMoving to next variable...\n")
+      cat("\n-------------------------------------------------------------------------\n\n")
+      Sys.sleep(wait)
+    }
 
   } # end for-loop
 
@@ -2044,12 +2307,15 @@ redcap_import_recode <- function(selected_data,
 
 
   # execute code ----
-  recoded_data <- mutate(selected_data,!!!vars_recode)
+  recoded_data <- input_data |>
+    mutate(!!!vars_recode) |>
+    select(-all_of(remove_cb_col))
 
 
   # finalize log-file ----
-  write.table(")\n\n--------------------------------------------------------------------------------------------------\n", log_code, quote = FALSE, row.names = FALSE, col.names = FALSE, append = TRUE)
-
+  if(log) {
+    write.table(")\n\n--------------------------------------------------------------------------------------------------\n", log_code, quote = FALSE, row.names = FALSE, col.names = FALSE, append = TRUE)
+  }
 
   # Return Output ----
   if (!suppress_txt) {

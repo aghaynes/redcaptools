@@ -1,7 +1,11 @@
 Package: redcaptools
 Type: Package
 Title: Tools for exporting and working with REDCap data
+<<<<<<< HEAD
 Version: 0.5.1
+=======
+Version: 0.5.2
+>>>>>>> bc58074ec27d1e5cfc28c8fa1acb2ac65b5dcb7e
 Authors@R: 
     c(
     person(given = "Alan G.", family = "Haynes", role = "cre",
