@@ -7,7 +7,7 @@
 #'
 #' @return dataframe
 #' @export
-#' @importFrom httr2 request req_headers req_body_form req_perform resp_status resp_body_json
+#' @importFrom httr2 request req_headers req_body_form req_perform resp_status resp_body_string
 #' @importFrom magrittr %>%
 #' @importFrom utils read.csv
 #' @importFrom rlang !!!
