@@ -1,11 +1,7 @@
 Package: redcaptools
 Type: Package
 Title: Tools for exporting and working with REDCap data
-<<<<<<< HEAD
-Version: 0.5.1
-=======
-Version: 0.5.2
->>>>>>> bc58074ec27d1e5cfc28c8fa1acb2ac65b5dcb7e
+Version: 0.5.3
 Authors@R: 
     c(
     person(given = "Alan G.", family = "Haynes", role = "cre",
@@ -17,7 +13,6 @@ Description: Tools for exporting and working with REDCap data (e.g. adding label
 License: MIT + file LICENSE
 Encoding: UTF-8
 LazyData: true
-RoxygenNote: 7.3.2
 Suggests: 
     rmarkdown,
     testthat (>= 3.0.0)
@@ -35,3 +30,4 @@ Imports:
     tidyselect,
     stringdist
 Config/testthat/edition: 3
+Config/roxygen2/version: 8.0.0

@@ -4,7 +4,7 @@
 \alias{redcap_export_tbl}
 \title{Export tables from REDCap}
 \usage{
-redcap_export_tbl(token, url, content, ...)
+redcap_export_tbl(token, url, content, ..., headers = NULL)
 }
 \arguments{
 \item{token}{REDcap API token}

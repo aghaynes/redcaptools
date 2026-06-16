@@ -1,3 +1,7 @@
+# redcaptools 0.5.3
+
+* allow passing https headers to the API interface
+
 # redcaptools 0.5.2
 
 * minor bug-fixes, improving readability in `redcap_import_select` and `redcap_import_recode`
