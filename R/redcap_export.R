@@ -36,7 +36,7 @@ redcap_export_tbl <- function(token, url, content, ..., headers = NULL){
   req <- req |>
     httr2::req_body_form(token = token,
                          content = content,
-                         format = "json", ...)
+                         format = "csv", ...)
 
   resp <- req |>  httr2::req_perform()
   if(httr2::resp_status(resp) == 200){
