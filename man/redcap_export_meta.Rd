@@ -18,7 +18,7 @@ redcap_export_meta(
 
 \item{tabs}{tables to export. \code{project} is always added.}
 
-\item{...}{other parameters passed to the API (see your REDCap API documentation for options)}
+\item{...}{other options passed to \link{redcap_export_tbl}}
 }
 \value{
 list of dataframes

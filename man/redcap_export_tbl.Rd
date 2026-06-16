@@ -14,6 +14,8 @@ redcap_export_tbl(token, url, content, ..., headers = NULL)
 \item{content}{content to download}
 
 \item{...}{other parameters passed to the API (see your REDCap API documentation for options)}
+
+\item{headers}{named list of http headers (unlikely to be required)}
 }
 \value{
 dataframe

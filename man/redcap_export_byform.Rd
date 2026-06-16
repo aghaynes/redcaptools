@@ -25,7 +25,7 @@ creates all forms for an event when any form in the event is created)}
 
 \item{wait}{seconds to wait between API calls}
 
-\item{...}{other parameters passed to the API (see your REDCap API documentation for options)}
+\item{...}{other options passed to [redcap_export_tbl]}
 }
 \value{
 list of dataframes

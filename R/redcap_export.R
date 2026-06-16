@@ -4,6 +4,7 @@
 #' @param url address of the API
 #' @param content content to download
 #' @param ... other parameters passed to the API (see your REDCap API documentation for options)
+#' @param headers named list of http headers (unlikely to be required)
 #'
 #' @return dataframe
 #' @export
@@ -76,6 +77,7 @@ redcap_export_tbl <- function(token, url, content, ..., headers = NULL){
 #' * `userRoleMapping` - user-roll mapping
 #' @inheritParams redcap_export_tbl
 #' @param tabs tables to export. `project` is always added.
+#' @param ... other options passed to [redcap_export_tbl]
 #' @note tables that are not relevant for non-longitudinal projects (e.g.
 #'   formEventMapping and event) are silently removed
 #' @return list of dataframes
@@ -120,6 +122,7 @@ redcap_export_meta <- function(token,
 #' @param remove_empty should empty rows be removed from the dataset (REDCap automatically
 #' creates all forms for an event when any form in the event is created)
 #' @param wait seconds to wait between API calls
+#' @param ... other options passed to [redcap_export_tbl]
 #'
 #' @return list of dataframes
 #' @export
@@ -191,6 +194,7 @@ redcap_export_byform <- function(token,
 #' @param byform logical. Download data by form (see \link{redcap_export_byform})
 #' @param remove_empty when using byform: should empty rows be removed from the dataset (REDCap automatically
 #' creates all forms for an event when any form in the event is created)
+#' @param ... other options passed to [redcap_export_tbl]
 #'
 #' @return depending on \code{byform}, either a list of dataframes or a single dataframe
 #' @export

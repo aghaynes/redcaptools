@@ -28,7 +28,7 @@ redcap_export_batch(
 \item{remove_empty}{when using byform: should empty rows be removed from the dataset (REDCap automatically
 creates all forms for an event when any form in the event is created)}
 
-\item{...}{other parameters passed to the API (see your REDCap API documentation for options)}
+\item{...}{other options passed to [redcap_export_tbl]}
 }
 \value{
 depending on \code{byform}, either a list of dataframes or a single dataframe
