@@ -10,11 +10,12 @@
 #' @importFrom httr2 request req_headers req_body_form req_perform resp_status resp_body_json
 #' @importFrom magrittr %>%
 #' @importFrom utils read.csv
+#' @importFrom rlang !!!
 #'
 #' @examples
 #' # token <- "some_really_long_string_provided_by_REDCap"
 #' # redcap_export_tbl(token, "https://www.some_redcap_url.com/api/", "record")
-redcap_export_tbl <- function(token, url, content, ...){
+redcap_export_tbl <- function(token, url, content, ..., headers = NULL){
   check_token(token)
   check_url(url)
   check_content(content)
@@ -24,15 +25,21 @@ redcap_export_tbl <- function(token, url, content, ...){
     url <- paste0(url, "/")
   }
 
-  req <- httr2::request(url) %>%
-    httr2::req_headers() %>%
+  req <- httr2::request(url)
+  if(!is.null(headers)) {
+    req <- req |> httr2::req_headers(!!!headers)
+
+  } else {
+    req <- req |> httr2::req_headers()
+  }
+  req <- req |>
     httr2::req_body_form(token = token,
                          content = content,
                          format = "json", ...)
 
-  resp <- req %>% httr2::req_perform()
+  resp <- req |>  httr2::req_perform()
   if(httr2::resp_status(resp) == 200){
-    body <- resp %>% httr2::resp_body_json(simplifyVector = TRUE)
+    body <- resp |> httr2::resp_body_json(simplifyVector = TRUE)
     # if(nchar(body) > 1){
     # loop through variables and coerce to numeric?
     tmp <- tempfile()
