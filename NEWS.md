@@ -1,3 +1,7 @@
+# redcaptools 0.5.4
+
+* add bug reports URL
+
 # redcaptools 0.5.3
 
 * allow passing https headers to the API interface
