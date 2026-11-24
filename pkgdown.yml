@@ -1,0 +1,7 @@
+pandoc: 3.8.3
+pkgdown: 2.2.1
+pkgdown_sha: ~
+articles:
+  api_endpoints: api_endpoints.html
+  redcaptools: redcaptools.html
+last_built: 2026-11-24T07:22Z
